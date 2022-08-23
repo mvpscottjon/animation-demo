@@ -11,8 +11,13 @@ import RxSwift
 
 class LaunchVC: UIViewController {
     private let catJumpsAnimationDuration = 1.0
-    private let catJumpOffsetX = 50.0
-    private var isCatJumpingRight = BehaviorRelay<Bool>(value: true)
+    private let catJumpEndPointOffsetX = 50.0
+    private let catJumpControlPointOffsetY = -70.0
+    private let isCatJumpingRight = BehaviorRelay<Bool>(value: true)
+    private let needsFlipCatImage = PublishRelay<Void>()
+    /// The `CGRect` as a temp frame for `catImageView`.
+    /// In order to re-assign frame when flip image(It will change `catImageView` when flip image).
+    private var cacheCatFrame = CGRect.zero
     private var timer: Disposable?
     private let bag = DisposeBag()
     
@@ -43,28 +48,14 @@ class LaunchVC: UIViewController {
         runAnimation()
     }
     
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-    }
-    
     deinit {
         timer?.dispose()
     }
     
     private func setupViews() {
-        let button = UIButton()
-        button.setTitle("Animate", for: .normal)
-        button.setTitleColor(.black, for: .normal)
-        button.backgroundColor = .orange
-        
-        view.addSubview(button)
-        button.snp.makeConstraints {
-            $0.center.equalToSuperview()
-        }
-                
         view.addSubview(logoLabel)
         logoLabel.snp.makeConstraints {
-            $0.top.equalToSuperview().inset(70)
+            $0.centerY.equalToSuperview()
             $0.leading.trailing.equalToSuperview()
         }
         
@@ -83,13 +74,13 @@ class LaunchVC: UIViewController {
             .filter { [weak self] (frame, isCatJumpingRight) in
                 guard let frame = frame, let self = self, isCatJumpingRight else { return false }
                 let imageWidth = self.catImageView.frame.width
-                // catImageView should add imageWidth to check if over right edge
+                // `catImageView` should add imageWidth to check if over right edge
                 return frame.maxX + imageWidth  >= self.view.frame.maxX
             }
             .map { !$1 }
             .bind(to: isCatJumpingRight)
             .disposed(by: bag)
-            
+        
         catImageView.rx.observe(CGRect.self, #keyPath(UIView.frame))
             .distinctUntilChanged()
             .withLatestFrom(isCatJumpingRight) { ($0, $1)}
@@ -100,46 +91,69 @@ class LaunchVC: UIViewController {
             .map { !$1 }
             .bind(to: isCatJumpingRight)
             .disposed(by: bag)
+        
+        isCatJumpingRight.distinctUntilChanged().map { _ in }.bind(to: needsFlipCatImage).disposed(by: bag)
+        
+        needsFlipCatImage
+            .subscribe(with: self, onNext: { `self`, _ in
+                self.timer?.dispose()
+                self.cacheCatFrame = self.catImageView.frame
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: {
+                    self.flipCatImage() {
+                        // After flip image, must re-assign old frame for `catImageView`, otherwise, `catImageView`'s
+                        // frame will become original frame(imageView initial frame).
+                        self.catImageView.frame = self.cacheCatFrame
+                        // Need to run
+                        self.catJumpAnimation()
+                    }
+                })
+            })
+            .disposed(by: bag)
     }
     
     private func runAnimation() {
-        logoLabelScrollUpAnimation()
-        
-        // must dispose timer before assign, prevent create timer more than one
-        timer?.dispose()
-        
-        timer = Observable<Int>
-            .timer(.seconds(0), period: .milliseconds(1000), scheduler: MainScheduler.instance)
-            .subscribe(onNext: { [weak self] _ in
-                self?.catJumpAnimation()
-            })
+        logoLabelScrollToCenterAnimation()
+        catJumpAnimation()
     }
     
     // MARK: - Animation
     
-    private func logoLabelScrollUpAnimation() {
+    private func logoLabelScrollToCenterAnimation() {
         logoLabel.alpha = 0.0
-        self.logoLabel.transform = CGAffineTransform(translationX: 0, y: self.view.center.y)
+        logoLabel.transform = CGAffineTransform(translationX: 0, y: -self.view.safeAreaLayoutGuide.layoutFrame.minY)
         
-        UIView.animate(withDuration: 1.2, delay: 0.0, options: []) {
+        UIView.animate(withDuration: 1.5) {
             self.logoLabel.transform = .identity
             self.logoLabel.alpha = 1.0
         }
     }
     
     private func catJumpAnimation() {
-        let isCatJumpingRight = isCatJumpingRight.value
-        if  isCatJumpingRight {
-            catJumpsRight()
-        } else {
-            catJumpsLeft()
-        }
+        // must dispose timer before assign, prevent create timer more than one
+        timer?.dispose()
+        
+        timer = Observable<Int>
+            .timer(.seconds(0), period: .milliseconds(1000), scheduler: MainScheduler.instance)
+            .subscribe(with:self, onNext: { `self`, _ in
+                let isCatJumpingRight = self.isCatJumpingRight.value
+                let endPointOffsetX = isCatJumpingRight ? self.catJumpEndPointOffsetX : -self.catJumpEndPointOffsetX
+                self.catJumps(
+                    withEndPointOffsetX: endPointOffsetX,
+                    controlPointOffsetY: self.catJumpControlPointOffsetY
+                )
+            })
     }
     
-    private func catJumpsRight() {
+    private func catJumps(withEndPointOffsetX endPointOffsetX: CGFloat, controlPointOffsetY: CGFloat) {
+        // If offsetX is positive means jump to right
+        // If offsetY is positive means jump to down
         let originPoint = CGPoint(x: catImageView.frame.minX, y: catImageView.frame.minY)
-        let endPoint = CGPoint(x: originPoint.x + catJumpOffsetX, y: originPoint.y)
-        let curveControlPoint = CGPoint(x: originPoint.x + (catJumpOffsetX / 2), y: originPoint.y - 70.0)
+        let endPoint = CGPoint(x: originPoint.x + endPointOffsetX, y: originPoint.y)
+        let curveControlPoint = CGPoint(
+            x: originPoint.x + (endPointOffsetX / 2),
+            y: originPoint.y + controlPointOffsetY
+        )
         
         let posAnimation = CAKeyframeAnimation(keyPath: #keyPath(CALayer.position))
         posAnimation.duration = catJumpsAnimationDuration
@@ -156,29 +170,18 @@ class LaunchVC: UIViewController {
         
         catImageView.layer.add(posAnimation, forKey: nil)
         // set endPoint to target view from really change view's frame
-        catImageView.frame.origin = endPoint
+        self.catImageView.frame.origin = endPoint
     }
     
-    private func catJumpsLeft() {
-        let originPoint = CGPoint(x: catImageView.frame.minX, y: catImageView.frame.minY)
-        let endPoint = CGPoint(x: originPoint.x - catJumpOffsetX, y: originPoint.y)
-        let curveControlPoint = CGPoint(x: originPoint.x + (-catJumpOffsetX / 2), y: originPoint.y - 70.0)
-        
-        let posAnimation = CAKeyframeAnimation(keyPath: #keyPath(CALayer.position))
-        posAnimation.duration = catJumpsAnimationDuration
-        posAnimation.isRemovedOnCompletion = false
-        posAnimation.fillMode = .forwards
-        
-        let path = UIBezierPath()
-        path.move(to: originPoint)
-        path.addQuadCurve(to: endPoint, controlPoint: curveControlPoint)
-        
-        posAnimation.path = path.cgPath
-        // need to set target layer anchorPoint to (0.0, 0.0)
-        catImageView.layer.anchorPoint = CGPoint(x: 0.0, y: 0.0)
-        
-        catImageView.layer.add(posAnimation, forKey: nil)
-        // set endPoint to target view from really change view's frame
-        catImageView.frame.origin = endPoint
+    private func flipCatImage(completion: (() -> ())? = nil) {
+        UIView.animate(
+            withDuration: 1.0,
+            animations: {
+                self.catImageView.image = self.catImageView.image?.withHorizontallyFlippedOrientation()
+            },
+            completion: { _ in
+                completion?()
+            }
+        )
     }
 }
