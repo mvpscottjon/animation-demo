@@ -10,6 +10,7 @@ import RxCocoa
 import RxSwift
 
 class LaunchVC: UIViewController {
+    private let customShapeScales = [0.7, 0.9, 0.7, 1.2, 0.7, 1.25]
     private let catJumpsAnimationDuration = 1.0
     private let catJumpEndPointOffsetX = 50.0
     private let catJumpControlPointOffsetY = -70.0
@@ -18,7 +19,9 @@ class LaunchVC: UIViewController {
     /// The `CGRect` as a temp frame for `catImageView`.
     /// In order to re-assign frame when flip image(It will change `catImageView` when flip image).
     private var cacheCatFrame = CGRect.zero
-    private var timer: Disposable?
+    private var catTimer: Disposable?
+    private var labelTimer: Disposable?
+
     private let bag = DisposeBag()
     
     private lazy var logoLabel: UILabel = {
@@ -29,6 +32,18 @@ class LaunchVC: UIViewController {
         return label
     }()
     
+    private lazy var circleView: UIView = {
+        let view = UIView()
+        view.backgroundColor = .lightGray.withAlphaComponent(0.9)
+                
+        return view
+    }()
+    
+    private lazy var customShapeView: UIView = {
+        let view = CustomShapeView()
+        return view
+    }()
+        
     private lazy var catImageView: UIImageView = {
         let imageView = UIImageView()
         imageView.image = UIImage(named: "cat1")
@@ -45,14 +60,33 @@ class LaunchVC: UIViewController {
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        runAnimation()
+        runAllAnimations()
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        circleView.layer.cornerRadius = circleView.frame.width / 2
     }
     
     deinit {
-        timer?.dispose()
+        catTimer?.dispose()
+        labelTimer?.dispose()
     }
     
     private func setupViews() {
+        
+        view.addSubview(customShapeView)
+        customShapeView.snp.makeConstraints {
+            $0.center.equalToSuperview()
+            $0.size.equalTo(300)
+        }
+        
+        view.addSubview(circleView)
+        circleView.snp.makeConstraints {
+            $0.center.equalToSuperview()
+            $0.size.equalTo(250)
+        }
+        
         view.addSubview(logoLabel)
         logoLabel.snp.makeConstraints {
             $0.centerY.equalToSuperview()
@@ -62,7 +96,7 @@ class LaunchVC: UIViewController {
         view.addSubview(catImageView)
         catImageView.snp.makeConstraints {
             $0.bottom.equalToSuperview().inset(30)
-            $0.leading.equalToSuperview().inset(50)
+            $0.leading.equalToSuperview()
             $0.size.equalTo(50)
         }
     }
@@ -74,6 +108,8 @@ class LaunchVC: UIViewController {
             .filter { [weak self] (frame, isCatJumpingRight) in
                 guard let frame = frame, let self = self, isCatJumpingRight else { return false }
                 let imageWidth = self.catImageView.frame.width
+//                let imageWidth = 0.0
+
                 // `catImageView` should add imageWidth to check if over right edge
                 return frame.maxX + imageWidth  >= self.view.frame.maxX
             }
@@ -86,7 +122,8 @@ class LaunchVC: UIViewController {
             .withLatestFrom(isCatJumpingRight) { ($0, $1)}
             .filter { [weak self] (frame, isCatJumpingRight) in
                 guard let frame = frame, let self = self, !isCatJumpingRight else { return false }
-                return frame.minX  <= self.view.frame.minY
+                let imageWidth = 0.0
+                return frame.minX + imageWidth / 2  <= self.view.frame.minY
             }
             .map { !$1 }
             .bind(to: isCatJumpingRight)
@@ -96,7 +133,7 @@ class LaunchVC: UIViewController {
         
         needsFlipCatImage
             .subscribe(with: self, onNext: { `self`, _ in
-                self.timer?.dispose()
+                self.catTimer?.dispose()
                 self.cacheCatFrame = self.catImageView.frame
                 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: {
@@ -112,28 +149,46 @@ class LaunchVC: UIViewController {
             .disposed(by: bag)
     }
     
-    private func runAnimation() {
+    // MARK: - Animation
+    
+    private func runAllAnimations() {
         logoLabelScrollToCenterAnimation()
+        shapeViewAnimation()
         catJumpAnimation()
     }
-    
-    // MARK: - Animation
     
     private func logoLabelScrollToCenterAnimation() {
         logoLabel.alpha = 0.0
         logoLabel.transform = CGAffineTransform(translationX: 0, y: -self.view.safeAreaLayoutGuide.layoutFrame.minY)
-        
+
         UIView.animate(withDuration: 1.5) {
             self.logoLabel.transform = .identity
             self.logoLabel.alpha = 1.0
         }
     }
+
+    private func shapeViewAnimation() {
+        // must dispose timer before assign, prevent create timer more than one
+        labelTimer?.dispose()
+        
+        labelTimer = Observable<Int>
+            .timer(.seconds(0), period: .milliseconds(1000), scheduler: MainScheduler.instance)
+            .subscribe(with:self, onNext: { `self`, time in
+                let scaleIndex = time % self.customShapeScales.count
+                guard self.customShapeScales.count > scaleIndex else { return }
+                
+                let scale = self.customShapeScales[scaleIndex]
+                UIView.animate(withDuration: 1.0) {
+                    self.customShapeView.transform = CGAffineTransform(scaleX: scale, y: scale)
+                }
+            })
+    }
     
     private func catJumpAnimation() {
         // must dispose timer before assign, prevent create timer more than one
-        timer?.dispose()
+        catTimer?.dispose()
         
-        timer = Observable<Int>
+        catTimer = Observable<Int>
             .timer(.seconds(0), period: .milliseconds(1000), scheduler: MainScheduler.instance)
             .subscribe(with:self, onNext: { `self`, _ in
                 let isCatJumpingRight = self.isCatJumpingRight.value
