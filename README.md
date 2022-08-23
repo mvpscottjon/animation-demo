@@ -1,9 +1,11 @@
 # animation-demo
 
 - A center label with shift animation.
+- A heart-like animation of shape below label.(use UIBezierPath and CAshapeLayer to draw irregular shape)
 - Make a cat jump and flip when arrive view's edge.
 
-<img src="https://user-images.githubusercontent.com/24777585/186154034-af1970b5-37c6-48d4-8882-e56d1d7bba5d.gif" width="300">
+
+<img src="https://user-images.githubusercontent.com/24777585/186221160-deddd03f-abd9-46e3-8e91-5677b4fdee38.gif" width="300">
 
 
 
